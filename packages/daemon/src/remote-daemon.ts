@@ -8,7 +8,6 @@ import { collectRuntimeOutputBundle, clearTaskOutputArtifacts, materializeInputB
 import { HttpDaemonClient } from "./daemon-client.ts";
 import { prepareSkillImportOperationArtifacts } from "./skill-imports.ts";
 import {
-  type DetectedProvider,
   detectProviders,
   normalizeProviderTaskErrorCategory,
   type ProviderApprovalRequest,
@@ -19,6 +18,7 @@ import {
   runProviderTask,
   type RemoteRuntimeRecord,
 } from "./provider-runtime.ts";
+import { buildRuntimeRegistrations } from "./runtime-variants.ts";
 import {
   cleanupStalePidFile,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -92,11 +92,23 @@ export async function runRemoteDaemonForeground(config: RemoteDaemonConfig): Pro
   writeFileSync(pidPath, `${process.pid}\n`, "utf8");
 
   const detected = detectProviders();
-  if (detected.length === 0) {
+  let runtimeRegistrations: ReturnType<typeof buildRuntimeRegistrations>;
+  try {
+    runtimeRegistrations = buildRuntimeRegistrations({
+      detected,
+      runtimeName: config.runtimeName,
+      deviceName: config.deviceName,
+      mode: "remote",
+      env: process.env,
+    });
+  } catch (error) {
     rmSync(pidPath, { force: true });
-    console.error(
-      "No supported provider CLI found. Install `codex`, `claude`, `gemini`, `opencode`, `openclaw`, `nanobot`, or `hermes` and ensure it is on PATH.",
-    );
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  if (runtimeRegistrations.length === 0) {
+    rmSync(pidPath, { force: true });
+    console.error("No supported provider CLI found. Install `codex`, `claude`, `gemini`, `opencode`, `openclaw`, `nanobot`, or `hermes` and ensure it is on PATH.");
     return 1;
   }
 
@@ -105,22 +117,10 @@ export async function runRemoteDaemonForeground(config: RemoteDaemonConfig): Pro
     daemonKey: config.daemonKey,
     deviceName: config.deviceName,
     metadata: readNodeMetadata(config.serverUrl, config.runtimeName),
-    runtimes: detected.map((provider) => ({
-      provider: provider.provider,
-      name: `${config.runtimeName} · ${provider.label}`,
-      version: provider.version,
-      deviceInfo: config.deviceName,
-      metadata: buildProviderRuntimeMetadata({
-        provider: provider.provider,
-        metadata: {
-          executablePath: provider.executablePath,
-          mode: "remote",
-        },
-      }),
-    })),
+    runtimes: runtimeRegistrations,
   });
 
-  let runtimes = buildRemoteRuntimeRecords(config, registered, detected);
+  let runtimes = buildRemoteRuntimeRecords(config, registered, runtimeRegistrations);
   if (runtimes.length === 0) {
     rmSync(pidPath, { force: true });
     console.error("Remote daemon registration returned no runnable runtimes.");
@@ -632,41 +632,49 @@ function buildRuntimeContextEnv(
   };
 }
 
-function buildRemoteRuntimeRecords(
+export function buildRemoteRuntimeRecords(
   config: RemoteDaemonConfig,
   registered: RegisterDaemonResponse,
-  detected: DetectedProvider[],
+  registrations: ReturnType<typeof buildRuntimeRegistrations>,
 ): RemoteRuntimeRecord[] {
+  const registrationByRuntimeKey = new Map(registrations.map((registration) => [
+    registration.runtimeKey?.trim() || registration.provider,
+    registration,
+  ]));
   return registered.runtimes.flatMap((runtime) => {
-    const detectedProvider = detected.find((provider) => provider.provider === runtime.provider);
-    if (!detectedProvider) {
+    const registration = registrationByRuntimeKey.get(runtime.runtimeKey);
+    if (!registration) {
       return [];
     }
+    const metadata = registration.metadata ?? {};
+    const executablePath = typeof metadata.executablePath === "string" ? metadata.executablePath : "";
+    const mode = metadata.mode === "remote" ? "remote" : "local";
 
     return [{
       id: runtime.id,
       workspaceId: registered.daemon.workspaceId,
-      provider: detectedProvider.provider,
+      provider: registration.provider,
       name: runtime.name,
-      version: detectedProvider.version,
+      version: registration.version,
       status: runtime.status,
       deviceInfo: config.deviceName,
       metadata: {
-        executablePath: detectedProvider.executablePath,
-        mode: "remote",
+        executablePath,
+        mode,
         ...buildProviderRuntimeMetadata({
-          provider: detectedProvider.provider,
+          provider: registration.provider,
           metadata: {
-            executablePath: detectedProvider.executablePath,
-            mode: "remote",
-          },
+            ...(metadata as Record<string, unknown>),
+            executablePath,
+            mode,
+          } as RemoteRuntimeRecord["metadata"],
         }),
       },
     } satisfies RemoteRuntimeRecord];
   });
 }
 
-function reconcileRemoteRuntimesWithHeartbeat(
+export function reconcileRemoteRuntimesWithHeartbeat(
   current: RemoteRuntimeRecord[],
   heartbeat: HeartbeatDaemonResponse,
 ): RemoteRuntimeRecord[] {
@@ -687,7 +695,7 @@ function reconcileRemoteRuntimesWithHeartbeat(
   });
 }
 
-function buildRemoteRuntimeHeartbeatMetadata(runtimes: RemoteRuntimeRecord[]): Array<{
+export function buildRemoteRuntimeHeartbeatMetadata(runtimes: RemoteRuntimeRecord[]): Array<{
   id: string;
   provider: RemoteRuntimeRecord["provider"];
   metadata: Record<string, unknown>;

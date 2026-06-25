@@ -85,6 +85,130 @@ test("heartbeat can refresh daemon metadata without changing runtimes", () => {
   assert.equal(snapshot.runtimes.length, 1);
 });
 
+test("registers multiple runtime variants for the same provider under one daemon", () => {
+  const initial = registerDaemonRuntimesSync({
+    daemonKey: "variant-box",
+    deviceName: "Build Box",
+    workspaceId: "default",
+    runtimes: [
+      {
+        provider: "hermes",
+        runtimeKey: "hermes:zero-qa:cheap",
+        name: "Hermes QA Cheap",
+        version: "0.2.0",
+        metadata: { runtimeKey: "hermes:zero-qa:cheap", hermesProfile: "zero-qa", hermesModel: "deepseek-v4-flash" },
+      },
+      {
+        provider: "hermes",
+        runtimeKey: "hermes:zero-review:gpt-5.5",
+        name: "Hermes Review Premium",
+        version: "0.2.0",
+        metadata: { runtimeKey: "hermes:zero-review:gpt-5.5", hermesProfile: "zero-review", hermesModel: "cliproxy/gpt-5.5" },
+      },
+    ],
+  });
+
+  assert.equal(initial.runtimes.length, 2);
+  assert.deepEqual(initial.runtimes.map((runtime) => runtime.runtimeKey), [
+    "hermes:zero-qa:cheap",
+    "hermes:zero-review:gpt-5.5",
+  ]);
+  const qaRuntimeId = initial.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-qa:cheap")?.id;
+  const reviewRuntimeId = initial.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-review:gpt-5.5")?.id;
+  assert.ok(qaRuntimeId);
+  assert.ok(reviewRuntimeId);
+  assert.notEqual(qaRuntimeId, reviewRuntimeId);
+
+  const repeated = registerDaemonRuntimesSync({
+    daemonKey: "variant-box",
+    deviceName: "Build Box",
+    workspaceId: "default",
+    runtimes: [
+      {
+        provider: "hermes",
+        runtimeKey: "hermes:zero-qa:cheap",
+        name: "Hermes QA Cheap v2",
+        version: "0.3.0",
+        metadata: { runtimeKey: "hermes:zero-qa:cheap", hermesProfile: "zero-qa", hermesModel: "deepseek-v4-flash-v2" },
+      },
+      {
+        provider: "hermes",
+        runtimeKey: "hermes:zero-review:gpt-5.5",
+        name: "Hermes Review Premium",
+        version: "0.2.0",
+        metadata: { runtimeKey: "hermes:zero-review:gpt-5.5", hermesProfile: "zero-review", hermesModel: "cliproxy/gpt-5.5" },
+      },
+    ],
+  });
+
+  const repeatedQa = repeated.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-qa:cheap");
+  assert.equal(repeatedQa?.id, qaRuntimeId);
+  assert.equal(repeatedQa?.name, "Hermes QA Cheap v2");
+  assert.equal(JSON.parse(repeatedQa?.metadataJson ?? "{}").hermesModel, "deepseek-v4-flash-v2");
+
+  const removedReview = registerDaemonRuntimesSync({
+    daemonKey: "variant-box",
+    deviceName: "Build Box",
+    workspaceId: "default",
+    runtimes: [
+      {
+        provider: "hermes",
+        runtimeKey: "hermes:zero-qa:cheap",
+        name: "Hermes QA Cheap v2",
+        version: "0.3.0",
+      },
+    ],
+  });
+  assert.equal(removedReview.runtimes.find((runtime) => runtime.id === qaRuntimeId)?.status, "online");
+  assert.equal(removedReview.runtimes.find((runtime) => runtime.id === reviewRuntimeId)?.status, "offline");
+});
+
+test("legacy runtime registration without runtimeKey still keys by provider", () => {
+  const first = registerDaemonRuntimesSync({
+    daemonKey: "legacy-box",
+    deviceName: "Build Box",
+    workspaceId: "default",
+    runtimes: [{ provider: "codex", name: "Codex", version: "1.0.0" }],
+  });
+  const second = registerDaemonRuntimesSync({
+    daemonKey: "legacy-box",
+    deviceName: "Build Box",
+    workspaceId: "default",
+    runtimes: [{ provider: "codex", name: "Codex v2", version: "1.1.0" }],
+  });
+
+  assert.equal(first.runtimes[0]?.runtimeKey, "codex");
+  assert.equal(second.runtimes[0]?.runtimeKey, "codex");
+  assert.equal(second.runtimes[0]?.id, first.runtimes[0]?.id);
+  assert.equal(second.runtimes[0]?.name, "Codex v2");
+});
+
+test("heartbeat can target duplicate-provider variants by runtimeKey", () => {
+  const snapshot = registerDaemonRuntimesSync({
+    daemonKey: "heartbeat-variant-box",
+    deviceName: "Build Box",
+    workspaceId: "default",
+    runtimes: [
+      { provider: "hermes", runtimeKey: "hermes:zero-qa", name: "Hermes QA" },
+      { provider: "hermes", runtimeKey: "hermes:zero-review", name: "Hermes Review" },
+    ],
+  });
+
+  const updated = heartbeatDaemonSync("heartbeat-variant-box", {
+    runtimes: [{
+      runtimeKey: "hermes:zero-qa",
+      provider: "hermes",
+      metadata: { providerHealth: { status: "healthy" } },
+    }],
+  });
+  const qaMetadata = JSON.parse(updated.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-qa")?.metadataJson ?? "{}");
+  const reviewMetadata = JSON.parse(updated.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-review")?.metadataJson ?? "{}");
+
+  assert.equal(snapshot.runtimes.length, 2);
+  assert.equal(qaMetadata.providerHealth.status, "healthy");
+  assert.equal(reviewMetadata.providerHealth, undefined);
+});
+
 test("heartbeat can refresh runtime provider health metadata", () => {
   registerDaemon("openclaw-box", "default");
   const runtime = readDaemonSnapshotSync("openclaw-box").runtimes[0]!;

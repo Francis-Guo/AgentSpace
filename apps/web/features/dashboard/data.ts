@@ -805,6 +805,12 @@ export interface ContainerRecord extends ManagementRecordBase {
   daemonMode?: "local" | "remote";
   serverUrl?: string;
   version?: string;
+  runtimeKey?: string;
+  variantLabel?: string;
+  hermesProfile?: string;
+  hermesModel?: string;
+  purpose?: string;
+  costTier?: string;
   lastHeartbeatAt?: string;
   executablePath?: string;
   daemonPid?: string;
@@ -909,6 +915,12 @@ export interface AgentsPageData {
     serverName: string;
     daemonKey: string;
     mode?: "local" | "remote";
+    runtimeKey?: string;
+    variantLabel?: string;
+    hermesProfile?: string;
+    hermesModel?: string;
+    purpose?: string;
+    costTier?: string;
   }>;
   currentUserId?: string;
   currentMembershipRole?: WorkspaceRole;
@@ -936,12 +948,16 @@ export interface DaemonSnapshotView {
   runtimes: Array<{
     id: string;
     provider: string;
+    runtimeKey: string;
     name: string;
     displayName?: string;
     status: "online" | "offline";
     providerHealth: RuntimeProviderHealth;
     lastHeartbeatAt?: string;
     version: string;
+    variantLabel?: string;
+    hermesProfile?: string;
+    hermesModel?: string;
   }>;
 }
 
@@ -2610,6 +2626,12 @@ export function getAgentsPageData(input: string | AgentsPageDataOptions = DEFAUL
     serverName: canManageRuntimes ? container.deviceName : container.name,
     daemonKey: canManageRuntimes ? container.daemonKey : "",
     mode: container.daemonMode,
+    runtimeKey: container.runtimeKey,
+    variantLabel: container.variantLabel,
+    hermesProfile: container.hermesProfile,
+    hermesModel: container.hermesModel,
+    purpose: container.purpose,
+    costTier: container.costTier,
   }));
   const pendingForkInvitations = currentUserId
     ? listAgentForkInvitationsForActorSync({
@@ -3418,20 +3440,27 @@ export function listDaemonSnapshotViews(workspaceId = DEFAULT_WORKSPACE_ID): Dae
         daemonMetadata.googleWorkspaceReadiness,
         latestExternalSheetFailure,
       ),
-      runtimes: snapshot.runtimes.map((runtime) => ({
-        id: runtime.id,
-        provider: runtime.provider,
-        name: runtime.name,
-        displayName: runtimeDisplayNames.get(runtime.id),
-        status: runtime.status,
-        providerHealth: normalizeRuntimeProviderHealth({
-          runtimeStatus: runtime.status,
-          runtimeMetadata: safeParseJson(runtime.metadataJson),
-          lastError: runtime.lastError,
-        }),
-        lastHeartbeatAt: runtime.lastHeartbeatAt,
-        version: runtime.version,
-      })),
+      runtimes: snapshot.runtimes.map((runtime) => {
+        const runtimeMetadata = safeParseJson(runtime.metadataJson);
+        return {
+          id: runtime.id,
+          provider: runtime.provider,
+          name: runtime.name,
+          displayName: runtimeDisplayNames.get(runtime.id),
+          status: runtime.status,
+          providerHealth: normalizeRuntimeProviderHealth({
+            runtimeStatus: runtime.status,
+            runtimeMetadata,
+            lastError: runtime.lastError,
+          }),
+          lastHeartbeatAt: runtime.lastHeartbeatAt,
+          version: runtime.version,
+          runtimeKey: readMetadataString(runtimeMetadata, "runtimeKey") ?? runtime.runtimeKey,
+          variantLabel: readMetadataString(runtimeMetadata, "variantLabel"),
+          hermesProfile: readMetadataString(runtimeMetadata, "hermesProfile"),
+          hermesModel: readMetadataString(runtimeMetadata, "hermesModel"),
+        };
+      }),
     };
   });
 }
@@ -4011,6 +4040,7 @@ function buildNativeRuntimeRecord(
   runtime: {
     id: string;
     provider: string;
+    runtimeKey: string;
     name: string;
     version: string;
     status: "online" | "offline";
@@ -4039,6 +4069,12 @@ function buildNativeRuntimeRecord(
   });
   const providerLabel = formatDaemonProviderLabel(runtime.provider);
   const trimmedDisplayName = displayName?.trim();
+  const runtimeKey = readMetadataString(runtimeMetadata, "runtimeKey") ?? runtime.runtimeKey;
+  const variantLabel = readMetadataString(runtimeMetadata, "variantLabel");
+  const hermesProfile = readMetadataString(runtimeMetadata, "hermesProfile");
+  const hermesModel = readMetadataString(runtimeMetadata, "hermesModel");
+  const purpose = readMetadataString(runtimeMetadata, "purpose");
+  const costTier = readMetadataString(runtimeMetadata, "costTier");
   const queueCounts = {
     queued: queuedTasks.filter((task) => task.status === "queued" || task.status === "claimed").length,
     running: queuedTasks.filter((task) => task.status === "running").length,
@@ -4136,6 +4172,12 @@ function buildNativeRuntimeRecord(
     daemonMode,
     serverUrl,
     version: runtime.version || undefined,
+    runtimeKey,
+    variantLabel,
+    hermesProfile,
+    hermesModel,
+    purpose,
+    costTier,
     lastHeartbeatAt: runtime.lastHeartbeatAt ?? daemon.lastHeartbeatAt,
     executablePath:
       typeof runtimeMetadata.executablePath === "string" ? runtimeMetadata.executablePath : undefined,
@@ -4184,6 +4226,11 @@ function safeParseJson(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function readMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveDaemonMode(

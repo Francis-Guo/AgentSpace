@@ -1,6 +1,7 @@
 import {
   SYSTEM_AGENT_TEMPLATE_PRESETS,
   resolveAgentTemplateSkillMatches,
+  type AgentTemplateCategory,
   type AgentTemplateId,
   type SystemAgentTemplatePreset,
 } from "@agent-space/domain";
@@ -31,7 +32,7 @@ interface CreateAgentModalProps {
 }
 
 type CreateMode = "template" | "blank";
-type AgentTemplateCategoryFilter = "all" | SystemAgentTemplatePreset["category"];
+type AgentTemplateCategoryFilter = "all" | AgentTemplateCategory;
 
 export function CreateAgentModal({
   containerOptions,
@@ -159,12 +160,7 @@ export function CreateAgentModal({
             <div className="agent-template-market" aria-label={tx("Agent 模板市场", "Agent template marketplace")}>
               <div className="agent-template-market__toolbar">
                 <div className="agent-template-market__tabs" aria-label={tx("模板范围", "Template scope")} role="tablist">
-                  {([
-                    ["all", tx("全部", "All")],
-                    ["finance", tx("金融", "Finance")],
-                    ["product", tx("产品", "Product")],
-                    ["design", tx("设计", "Design")],
-                  ] as const).map(([value, label]) => (
+                  {buildTemplateCategoryTabs(tx).map(([value, label]) => (
                     <button
                       aria-selected={templateCategory === value}
                       className={`agent-template-market__tab${templateCategory === value ? " agent-template-market__tab--active" : ""}`}
@@ -373,7 +369,7 @@ function createBlankDraft(): {
 }
 
 function translateTemplateCategory(
-  category: SystemAgentTemplatePreset["category"],
+  category: AgentTemplateCategory,
   tx: (zh: string, en: string) => string,
 ): string {
   if (category === "finance") {
@@ -382,10 +378,28 @@ function translateTemplateCategory(
   if (category === "product") {
     return tx("产品", "Product");
   }
-  return tx("设计", "Design");
+  if (category === "design") {
+    return tx("设计", "Design");
+  }
+  if (category === "engineering") {
+    return tx("工程", "Engineering");
+  }
+  if (category === "quality") {
+    return tx("质量", "Quality");
+  }
+  if (category === "operations") {
+    return tx("运维", "Operations");
+  }
+  if (category === "security") {
+    return tx("安全", "Security");
+  }
+  if (category === "research") {
+    return tx("研究", "Research");
+  }
+  return tx("文档", "Documentation");
 }
 
-function iconForTemplateCategory(category: SystemAgentTemplatePreset["category"]): "costs" | "taskBoard" | "templates" {
+function iconForTemplateCategory(category: AgentTemplateCategory): "costs" | "taskBoard" | "templates" {
   if (category === "finance") {
     return "costs";
   }
@@ -393,4 +407,21 @@ function iconForTemplateCategory(category: SystemAgentTemplatePreset["category"]
     return "taskBoard";
   }
   return "templates";
+}
+
+function buildTemplateCategoryTabs(
+  tx: (zh: string, en: string) => string,
+): Array<readonly [AgentTemplateCategoryFilter, string]> {
+  return [
+    ["all", tx("全部", "All")],
+    ["finance", tx("金融", "Finance")],
+    ["product", tx("产品", "Product")],
+    ["design", tx("设计", "Design")],
+    ["engineering", tx("工程", "Engineering")],
+    ["quality", tx("质量", "Quality")],
+    ["operations", tx("运维", "Operations")],
+    ["security", tx("安全", "Security")],
+    ["research", tx("研究", "Research")],
+    ["documentation", tx("文档", "Documentation")],
+  ];
 }

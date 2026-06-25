@@ -318,6 +318,7 @@ const data: AgentsPageData = {
         {
           id: "runtime-1",
           provider: "codex",
+          runtimeKey: "codex",
           name: "Remote Codex",
           status: "online",
           lastHeartbeatAt: "2026-04-10T09:00:00.000Z",
@@ -730,6 +731,28 @@ describe("AgentsPageClient", () => {
           remarkName: "财务分析 Agent",
           runtimeId: "runtime-1",
           templateId: "finance-analyst",
+        }),
+      );
+    });
+  });
+
+  it("finds and creates an agent from a Zero engineering template", async () => {
+    const user = userEvent.setup();
+
+    renderAgentsPage(data);
+
+    await user.click(screen.getByRole("button", { name: "新建 Agent" }));
+    await user.click(screen.getByRole("tab", { name: "工程" }));
+    await user.click(screen.getByRole("button", { name: /Zero 前端工程师 Agent/ }));
+    await user.click(screen.getAllByRole("button", { name: "从模板创建" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(createWorkspaceAgentAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "zero-frontend-engineer",
+          remarkName: "Zero 前端工程师",
+          runtimeId: "runtime-1",
+          templateId: "zero-frontend-engineer",
         }),
       );
     });

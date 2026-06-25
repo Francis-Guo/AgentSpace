@@ -16,6 +16,7 @@ export * from "./openclaw-health.ts";
 export * from "./agent-router/index.ts";
 export * from "./provider-runtime.ts";
 export * from "./runtime-output-manifests.ts";
+export * from "./runtime-variants.ts";
 export * from "./state.ts";
 export * from "./skill-imports.ts";
 export * from "./task-context.ts";

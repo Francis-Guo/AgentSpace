@@ -23,6 +23,14 @@ export async function POST(request: Request): Promise<Response> {
   if (body.runtimes.some((runtime) => !runtime?.provider || !isDaemonProvider(runtime.provider))) {
     return Response.json({ error: "runtimes[].provider contains an unsupported provider id." }, { status: 400 });
   }
+  const runtimeKeys = new Set<string>();
+  for (const runtime of body.runtimes) {
+    const runtimeKey = runtime.runtimeKey?.trim() || runtime.provider.trim();
+    if (runtimeKeys.has(runtimeKey)) {
+      return Response.json({ error: `Duplicate runtimeKey "${runtimeKey}" in runtimes[].` }, { status: 400 });
+    }
+    runtimeKeys.add(runtimeKey);
+  }
   if (body.workspaceId && body.workspaceId !== auth.workspaceId) {
     tryRecordWorkspaceAuditEventSync({
       workspaceId: auth.workspaceId,
@@ -47,6 +55,7 @@ export async function POST(request: Request): Promise<Response> {
     metadata: body.metadata,
     runtimes: body.runtimes.map((runtime) => ({
       provider: runtime.provider,
+      runtimeKey: runtime.runtimeKey?.trim(),
       name: runtime.name.trim(),
       version: runtime.version?.trim(),
       deviceInfo: runtime.deviceInfo?.trim(),
@@ -68,6 +77,7 @@ export async function POST(request: Request): Promise<Response> {
     runtimes: snapshot.runtimes.map((runtime) => ({
       id: runtime.id,
       provider: runtime.provider,
+      runtimeKey: runtime.runtimeKey,
       name: runtime.name,
       status: runtime.status,
     })),

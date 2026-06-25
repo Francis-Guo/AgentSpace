@@ -140,11 +140,17 @@ export function resolveExecutionEngineValue(
 
 function EngineMeta({ option }: { readonly option: ExecutionEngineOption }) {
   const { tx } = useLanguage();
+  const variantLabel = option.variantLabel || option.runtimeKey;
   return (
     <span className="execution-engine-select__meta">
       <span>{option.serverName || option.daemonKey}</span>
       <span>{formatDaemonProviderLabel(option.provider)}</span>
       <span>{option.mode === "remote" ? tx("远程", "Remote") : tx("本地", "Local")}</span>
+      {variantLabel ? <code>{variantLabel}</code> : null}
+      {option.hermesProfile ? <span>{tx(`Profile: ${option.hermesProfile}`, `Profile: ${option.hermesProfile}`)}</span> : null}
+      {option.hermesModel ? <span>{option.hermesModel}</span> : null}
+      {option.purpose ? <span>{option.purpose}</span> : null}
+      {option.costTier ? <span>{option.costTier}</span> : null}
       {option.daemonKey.trim() ? <code>{option.daemonKey}</code> : null}
     </span>
   );

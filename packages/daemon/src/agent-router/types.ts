@@ -13,6 +13,7 @@ export interface AgentRouterRunRequest {
   prompt: string;
   cwd: string;
   executablePath?: string;
+  profile?: string;
   model?: string;
   mode?: string;
   sessionId?: string;

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,8 @@ import {
   enqueueNativeTaskSync,
   listDaemonSnapshotsSync,
   listTaskMessagesForTaskSync,
+  readAgentRuntimeSync,
+  readLatestAgentTaskAttemptForTaskSync,
 } from "@agent-space/db";
 import { getDatabase } from "@agent-space/db/database";
 import {
@@ -21,6 +23,7 @@ import {
   writeWorkspaceStateSync,
 } from "@agent-space/services";
 import { HttpDaemonClient } from "agent-space-daemon/daemon-client";
+import { runProviderTask, type RemoteRuntimeRecord } from "agent-space-daemon";
 import { POST as registerPOST } from "./register/route";
 import { POST as heartbeatPOST } from "./heartbeat/route";
 import { POST as deregisterPOST } from "./deregister/route";
@@ -111,6 +114,156 @@ describe("remote daemon client integration", () => {
         registered.runtimes.map((runtime) => runtime.provider).sort(),
         ["opencode", "openclaw", "nanobot", "hermes"].sort(),
       );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it("routes a bound task to the intended Hermes variant and launches fake Hermes with profile/model", async () => {
+    const daemonToken = createDaemonApiTokenSync({
+      label: "integration-daemon",
+      createdBy: "Tianyu",
+    });
+    const workDir = mkdtempSync(join(tempRoot, "runtime-variant-work-"));
+    const binDir = join(workDir, "bin");
+    const hermesPath = join(binDir, "hermes");
+    const argsPath = join(workDir, "hermes-args.txt");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      hermesPath,
+      [
+        "#!/bin/sh",
+        "printf '%s\\n' \"$@\" > \"$HERMES_ARGS_PATH\"",
+        "printf '%s\\n' 'qa hermes output'",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(hermesPath, 0o755);
+
+    const restoreFetch = installDaemonRouteFetch();
+    const client = new HttpDaemonClient("http://daemon.test", daemonToken.token, {
+      retryDelayMs: 0,
+      maxRetryAttempts: 2,
+    });
+
+    try {
+      const registered = await client.register({
+        daemonKey: "integration-box-hermes-variants",
+        deviceName: "Integration Hermes Box",
+        runtimes: [
+          {
+            provider: "hermes",
+            runtimeKey: "hermes:zero-qa:cheap",
+            name: "Hermes QA Cheap",
+            version: "hermes 0.2.0",
+            metadata: {
+              executablePath: hermesPath,
+              mode: "remote",
+              runtimeKey: "hermes:zero-qa:cheap",
+              variantLabel: "Hermes QA Cheap",
+              hermesProfile: "zero-qa",
+              hermesModel: "deepseek-v4-flash",
+              purpose: "qa/batch",
+              costTier: "cheap",
+            },
+          },
+          {
+            provider: "hermes",
+            runtimeKey: "hermes:zero-review:gpt-5.5",
+            name: "Hermes Review Premium",
+            version: "hermes 0.2.0",
+            metadata: {
+              executablePath: hermesPath,
+              mode: "remote",
+              runtimeKey: "hermes:zero-review:gpt-5.5",
+              variantLabel: "Hermes Review Premium",
+              hermesProfile: "zero-review",
+              hermesModel: "cliproxy/gpt-5.5",
+              purpose: "review",
+              costTier: "premium",
+            },
+          },
+        ],
+      });
+      const qaRuntime = registered.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-qa:cheap");
+      const reviewRuntime = registered.runtimes.find((runtime) => runtime.runtimeKey === "hermes:zero-review:gpt-5.5");
+      assert.ok(qaRuntime);
+      assert.ok(reviewRuntime);
+      expect(qaRuntime.id).not.toBe(reviewRuntime.id);
+
+      createEmployeeSync({
+        name: "Atlas",
+        role: "QA/Test Engineer",
+      });
+      bindEmployeeRuntimeSync("Atlas", qaRuntime.id);
+      const queued = enqueueNativeTaskSync({
+        assignee: "Atlas",
+        title: "Verify runtime variant routing",
+        priority: "high",
+        triggerType: "manual",
+        metadata: {
+          title: "Verify runtime variant routing",
+        },
+      });
+      assert.ok(queued);
+
+      const wrongClaim = await client.claimTask(reviewRuntime.id);
+      expect(wrongClaim.task).toBeNull();
+
+      const claimed = await client.claimTask(qaRuntime.id);
+      assert.ok(claimed.task);
+      expect(claimed.task.runtimeId).toBe(qaRuntime.id);
+
+      await client.startTask(claimed.task.id);
+      const inputBundle = await client.getInputBundle(claimed.task.id);
+      expect(inputBundle.prompt).toContain("Verify runtime variant routing");
+
+      const persistedRuntime = readAgentRuntimeSync(qaRuntime.id);
+      assert.ok(persistedRuntime);
+      const runtimeMetadata = JSON.parse(persistedRuntime.metadataJson) as RemoteRuntimeRecord["metadata"];
+      const providerRuntime: RemoteRuntimeRecord = {
+        id: persistedRuntime.id,
+        workspaceId: persistedRuntime.workspaceId,
+        provider: persistedRuntime.provider,
+        name: persistedRuntime.name,
+        version: persistedRuntime.version,
+        status: persistedRuntime.status,
+        deviceInfo: persistedRuntime.deviceInfo,
+        metadata: runtimeMetadata,
+      };
+
+      const result = await runProviderTask(providerRuntime, inputBundle.prompt, workDir, {
+        contextEnv: {
+          HERMES_ARGS_PATH: argsPath,
+        },
+        taskTimeoutMs: 1_000,
+      });
+      await client.completeTask(claimed.task.id, {
+        outputText: result.output,
+        sessionId: result.sessionId,
+        workDir,
+      });
+
+      const args = readFileSync(argsPath, "utf8").trim().split(/\r?\n/);
+      expect(args.slice(0, 3)).toEqual(["-z", inputBundle.prompt, "--yolo"]);
+      expect(args.slice(3)).toEqual(["--profile", "zero-qa", "--model", "deepseek-v4-flash"]);
+      expect(result.output).toBe("qa hermes output");
+
+      const attempt = readLatestAgentTaskAttemptForTaskSync(claimed.task.id);
+      assert.ok(attempt);
+      expect(attempt.runtimeId).toBe(qaRuntime.id);
+      expect(attempt.provider).toBe("hermes");
+      expect(attempt.status).toBe("completed");
+
+      const attemptRuntime = readAgentRuntimeSync(attempt.runtimeId);
+      assert.ok(attemptRuntime);
+      const attemptRuntimeMetadata = JSON.parse(attemptRuntime.metadataJson) as Record<string, unknown>;
+      expect(attemptRuntimeMetadata.runtimeKey).toBe("hermes:zero-qa:cheap");
+      expect(attemptRuntimeMetadata.hermesProfile).toBe("zero-qa");
+      expect(attemptRuntimeMetadata.hermesModel).toBe("deepseek-v4-flash");
+
+      const state = readWorkspaceStateSync();
+      expect(state.messages.some((message) => message.role === "agent" && message.summary === "qa hermes output")).toBe(true);
     } finally {
       restoreFetch();
     }

@@ -29,9 +29,18 @@ export interface ProviderRuntimeRecord {
   metadata: {
     executablePath: string;
     mode: "local" | "remote";
+    runtimeKey?: string;
+    variantLabel?: string;
     providerHealth?: Record<string, unknown>;
     openClawProfile?: string;
     openClawModel?: string;
+    hermesProfile?: string;
+    hermesModel?: string;
+    hermesToolsets?: string[];
+    hermesMemoryScope?: string;
+    purpose?: string;
+    costTier?: "premium" | "standard" | "cheap";
+    maxConcurrentTasks?: number;
   };
 }
 
@@ -225,6 +234,7 @@ async function runAgentRouterProviderTask(
     prompt,
     cwd: workDir,
     executablePath: runtime.metadata.executablePath,
+    profile: resolveHermesProfile(runtime),
     model: resolveModelId(runtime),
     mode: resolveAgentRouterMode(runtime),
     sessionId,
@@ -820,8 +830,15 @@ export function resolveModelId(runtime: ProviderRuntimeRecord): string | undefin
   if (runtime.provider === "opencode") return process.env.OPENCODE_MODEL || providerDefinition?.defaultModelId || "opencode-default";
   if (runtime.provider === "openclaw") return readRuntimeMetadataString(runtime, "openClawModel", "openclawModel") || process.env.OPENCLAW_MODEL?.trim() || undefined;
   if (runtime.provider === "nanobot") return process.env.NANOBOT_MODEL || providerDefinition?.defaultModelId || "nanobot-default";
-  if (runtime.provider === "hermes") return process.env.HERMES_MODEL?.trim() || process.env.HERMES_INFERENCE_MODEL?.trim() || undefined;
+  if (runtime.provider === "hermes") return readRuntimeMetadataString(runtime, "hermesModel", "model") || process.env.HERMES_MODEL?.trim() || process.env.HERMES_INFERENCE_MODEL?.trim() || undefined;
   return providerDefinition?.defaultModelId;
+}
+
+export function resolveHermesProfile(runtime: ProviderRuntimeRecord): string | undefined {
+  if (runtime.provider !== "hermes") {
+    return undefined;
+  }
+  return readRuntimeMetadataString(runtime, "hermesProfile", "profile");
 }
 
 export function readNodeMetadata(serverUrl: string, runtimeName: string, runtimes: ProviderRuntimeRecord[] = []): Record<string, unknown> {
@@ -844,10 +861,7 @@ export function readNodeMetadata(serverUrl: string, runtimeName: string, runtime
 }
 
 export function buildProviderRuntimeMetadata(runtime: Pick<ProviderRuntimeRecord, "provider" | "metadata">): Record<string, unknown> {
-  const base: Record<string, unknown> = {
-    executablePath: runtime.metadata.executablePath,
-    mode: runtime.metadata.mode,
-  };
+  const base = sanitizeProviderRuntimeMetadata(runtime.metadata);
   if (runtime.provider === "openclaw") {
     const profile = process.env.OPENCLAW_PROFILE?.trim();
     const model = process.env.OPENCLAW_MODEL?.trim();
@@ -858,12 +872,48 @@ export function buildProviderRuntimeMetadata(runtime: Pick<ProviderRuntimeRecord
     });
     return {
       ...base,
-      openClawProfile: profile,
-      openClawModel: model,
+      openClawProfile: base.openClawProfile ?? profile,
+      openClawModel: base.openClawModel ?? model,
       providerHealth: buildOpenClawProviderHealthSnapshot(health),
     };
   }
   return base;
+}
+
+function sanitizeProviderRuntimeMetadata(metadata: ProviderRuntimeRecord["metadata"]): Record<string, unknown> {
+  const output: Record<string, unknown> = {
+    executablePath: metadata.executablePath,
+    mode: metadata.mode,
+  };
+  for (const key of [
+    "runtimeKey",
+    "variantLabel",
+    "openClawProfile",
+    "openClawModel",
+    "hermesProfile",
+    "hermesModel",
+    "hermesMemoryScope",
+    "purpose",
+    "costTier",
+  ] as const) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim()) {
+      output[key] = value.trim();
+    }
+  }
+  if (Array.isArray(metadata.hermesToolsets)) {
+    const toolsets = metadata.hermesToolsets.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map((value) => value.trim());
+    if (toolsets.length > 0) {
+      output.hermesToolsets = [...new Set(toolsets)];
+    }
+  }
+  if (typeof metadata.maxConcurrentTasks === "number" && Number.isInteger(metadata.maxConcurrentTasks) && metadata.maxConcurrentTasks > 0) {
+    output.maxConcurrentTasks = metadata.maxConcurrentTasks;
+  }
+  if (metadata.providerHealth && typeof metadata.providerHealth === "object" && !Array.isArray(metadata.providerHealth)) {
+    output.providerHealth = metadata.providerHealth;
+  }
+  return output;
 }
 
 function readRuntimeProviderHealthMetadata(runtime: ProviderRuntimeRecord): ReturnType<typeof buildOpenClawProviderHealthSnapshot> | undefined {

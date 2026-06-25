@@ -24,6 +24,7 @@ import {
   buildProviderRuntimeMetadata,
   readProviderTaskFailureMetadata,
   readGoogleWorkspaceReadiness,
+  buildRuntimeRegistrations,
   resolveModelId as resolveSharedModelId,
   runProviderTask as runSharedProviderTask,
   runRemoteDaemonForeground as runStandaloneRemoteDaemonForeground,
@@ -232,11 +233,23 @@ async function runLocalDaemonForeground(config: DaemonConfig): Promise<number> {
   process.env.AGENT_SPACE_TASK_TIMEOUT_MS = String(config.taskTimeoutMs);
 
   const detected = detectProviders();
-  if (detected.length === 0) {
+  let runtimeRegistrations: ReturnType<typeof buildRuntimeRegistrations>;
+  try {
+    runtimeRegistrations = buildRuntimeRegistrations({
+      detected,
+      runtimeName: config.runtimeName,
+      deviceName: config.deviceName,
+      mode: "local",
+      env: process.env,
+    });
+  } catch (error) {
     rmSync(pidPath, { force: true });
-    console.error(
-      "No supported provider CLI found. Install `codex`, `claude`, `gemini`, `opencode`, `openclaw`, `nanobot`, or `hermes` and ensure it is on PATH.",
-    );
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  if (runtimeRegistrations.length === 0) {
+    rmSync(pidPath, { force: true });
+    console.error("No supported provider CLI found. Install `codex`, `claude`, `gemini`, `opencode`, `openclaw`, `nanobot`, or `hermes` and ensure it is on PATH.");
     return 1;
   }
 
@@ -244,19 +257,7 @@ async function runLocalDaemonForeground(config: DaemonConfig): Promise<number> {
     daemonKey: config.daemonKey,
     deviceName: config.deviceName,
     metadata: buildLocalDaemonMetadata(config),
-    runtimes: detected.map((provider) => ({
-      provider: provider.provider,
-      name: `${config.runtimeName} · ${provider.label}`,
-      version: provider.version,
-      deviceInfo: config.deviceName,
-      metadata: buildProviderRuntimeMetadata({
-        provider: provider.provider,
-        metadata: {
-          executablePath: provider.executablePath,
-          mode: "local",
-        },
-      }),
-    })),
+    runtimes: runtimeRegistrations,
   });
 
   console.log(`Daemon online: ${snapshot.daemon.daemonKey}`);
@@ -1382,9 +1383,18 @@ function toProviderRuntimeRecord(runtime: AgentRuntimeRecord): ProviderRuntimeRe
     metadata: {
       executablePath: typeof metadata.executablePath === "string" ? metadata.executablePath : "",
       mode: metadata.mode === "remote" ? "remote" : "local",
+      runtimeKey: typeof metadata.runtimeKey === "string" ? metadata.runtimeKey : runtime.runtimeKey,
+      variantLabel: typeof metadata.variantLabel === "string" ? metadata.variantLabel : undefined,
       providerHealth: isRecord(metadata.providerHealth) ? metadata.providerHealth : undefined,
       openClawProfile: typeof metadata.openClawProfile === "string" ? metadata.openClawProfile : undefined,
       openClawModel: typeof metadata.openClawModel === "string" ? metadata.openClawModel : undefined,
+      hermesProfile: typeof metadata.hermesProfile === "string" ? metadata.hermesProfile : undefined,
+      hermesModel: typeof metadata.hermesModel === "string" ? metadata.hermesModel : undefined,
+      hermesToolsets: Array.isArray(metadata.hermesToolsets) ? metadata.hermesToolsets.filter((value): value is string => typeof value === "string") : undefined,
+      hermesMemoryScope: typeof metadata.hermesMemoryScope === "string" ? metadata.hermesMemoryScope : undefined,
+      purpose: typeof metadata.purpose === "string" ? metadata.purpose : undefined,
+      costTier: metadata.costTier === "premium" || metadata.costTier === "standard" || metadata.costTier === "cheap" ? metadata.costTier : undefined,
+      maxConcurrentTasks: typeof metadata.maxConcurrentTasks === "number" ? metadata.maxConcurrentTasks : undefined,
     },
   };
 }
@@ -1439,6 +1449,7 @@ function buildRemoteRuntimeRecords(
       id: runtime.id,
       workspaceId: registered.daemon.workspaceId,
       provider: detectedProvider.provider,
+      runtimeKey: runtime.runtimeKey,
       name: runtime.name,
       version: detectedProvider.version,
       status: runtime.status,

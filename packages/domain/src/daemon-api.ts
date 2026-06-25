@@ -73,6 +73,7 @@ export interface RuntimeProviderHealth {
 
 export interface DaemonRuntimeInfo {
   provider: DaemonProvider;
+  runtimeKey?: string;
   name: string;
   version?: string;
   deviceInfo?: string;
@@ -97,6 +98,7 @@ export interface RegisterDaemonResponse {
   runtimes: Array<{
     id: string;
     provider: DaemonProvider;
+    runtimeKey: string;
     name: string;
     status: "online" | "offline";
   }>;
@@ -107,6 +109,7 @@ export interface HeartbeatDaemonRequest {
   metadata?: Record<string, unknown>;
   runtimes?: Array<{
     id?: string;
+    runtimeKey?: string;
     provider?: DaemonProvider;
     metadata?: Record<string, unknown>;
   }>;
@@ -122,6 +125,7 @@ export interface HeartbeatDaemonResponse {
   runtimes: Array<{
     id: string;
     provider: DaemonProvider;
+    runtimeKey: string;
     status: "online" | "offline";
     lastHeartbeatAt?: string;
     metadata?: Record<string, unknown>;

@@ -136,6 +136,7 @@ export interface AgentRuntimeRecord {
   workspaceId: string;
   daemonConnectionId?: string;
   provider: DaemonProvider;
+  runtimeKey: string;
   name: string;
   version: string;
   status: "online" | "offline";
@@ -159,6 +160,7 @@ export interface WorkspaceRuntimeDisplayNameRecord {
 
 export interface RuntimeRegistrationInput {
   provider: DaemonProvider;
+  runtimeKey?: string;
   name: string;
   version?: string;
   deviceInfo?: string;

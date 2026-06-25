@@ -7,10 +7,12 @@ import { formatDaemonProviderLabel } from "@agent-space/domain";
 import {
   detectProviders,
   readProviderTaskFailureMetadata,
+  resolveHermesProfile,
   resolveModelId,
   runProviderTask,
   type ProviderRuntimeRecord,
 } from "./provider-runtime.ts";
+import { buildRuntimeRegistrations } from "./runtime-variants.ts";
 import { inspectOpenClawDaemonAuthHealth, normalizeOpenClawProviderError } from "./openclaw-health.ts";
 
 test("detectProviders includes opencode, openclaw, nanobot, and hermes when their CLIs are on PATH", () => {
@@ -23,13 +25,15 @@ test("detectProviders includes opencode, openclaw, nanobot, and hermes when thei
       writeFileSync(filePath, "#!/bin/sh\necho 0.1.0\n", "utf8");
       chmodSync(filePath, 0o755);
     }
-    const hermesPath = join(binDir, "hermes-agent");
-    writeFileSync(
-      hermesPath,
-      "#!/bin/sh\nif [ \"$1\" = 'version' ]; then echo hermes 0.2.0; fi\n",
-      "utf8",
-    );
-    chmodSync(hermesPath, 0o755);
+    for (const command of ["hermes", "hermes-agent"]) {
+      const hermesPath = join(binDir, command);
+      writeFileSync(
+        hermesPath,
+        "#!/bin/sh\nif [ \"$1\" = 'version' ]; then echo hermes 0.2.0; fi\n",
+        "utf8",
+      );
+      chmodSync(hermesPath, 0o755);
+    }
 
     process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
 
@@ -127,6 +131,22 @@ test("resolveModelId returns provider-specific defaults and overrides for expand
     }), "runtime/override-model");
     assert.equal(resolveModelId({ ...baseRuntime, provider: "nanobot" }), "gpt-4.1-mini");
     assert.equal(resolveModelId({ ...baseRuntime, provider: "hermes" }), "nous-hermes-config");
+    assert.equal(resolveModelId({
+      ...baseRuntime,
+      provider: "hermes",
+      metadata: {
+        ...baseRuntime.metadata,
+        hermesModel: "runtime/nous-hermes",
+      },
+    }), "runtime/nous-hermes");
+    assert.equal(resolveHermesProfile({
+      ...baseRuntime,
+      provider: "hermes",
+      metadata: {
+        ...baseRuntime.metadata,
+        hermesProfile: "zero-qa",
+      },
+    }), "zero-qa");
 
     process.env.HERMES_MODEL = "nous-hermes";
     assert.equal(resolveModelId({ ...baseRuntime, provider: "hermes" }), "nous-hermes");
@@ -161,6 +181,175 @@ test("resolveModelId returns provider-specific defaults and overrides for expand
     } else {
       process.env.HERMES_INFERENCE_MODEL = originalHermesInferenceModel;
     }
+  }
+});
+
+test("buildRuntimeRegistrations maps configured Hermes variants into stable runtime metadata", () => {
+  const binDir = mkdtempSync(join(tmpdir(), "agent-space-runtime-variants-"));
+  const hermesPath = join(binDir, "hermes");
+  writeFileSync(hermesPath, "#!/bin/sh\necho hermes 0.2.0\n", "utf8");
+  chmodSync(hermesPath, 0o755);
+
+  try {
+    const registrations = buildRuntimeRegistrations({
+      detected: [{
+        provider: "hermes",
+        label: "Hermes Agent",
+        executablePath: hermesPath,
+        version: "hermes 0.2.0",
+      }],
+      runtimeName: "Fei AgentSpace",
+      deviceName: "Build Box",
+      mode: "local",
+      env: {
+        AGENT_SPACE_RUNTIME_VARIANTS_JSON: JSON.stringify([
+          {
+            provider: "hermes",
+            runtimeKey: "hermes:zero-qa:cheap",
+            name: "Hermes QA Cheap",
+            profile: "zero-qa",
+            model: "deepseek-v4-flash",
+            purpose: "qa/batch",
+            costTier: "cheap",
+            maxConcurrentTasks: 1,
+          },
+        ]),
+      },
+    });
+
+    assert.equal(registrations.length, 1);
+    assert.equal(registrations[0]?.runtimeKey, "hermes:zero-qa:cheap");
+    assert.equal(registrations[0]?.name, "Hermes QA Cheap");
+    assert.deepEqual(registrations[0]?.metadata, {
+      executablePath: hermesPath,
+      mode: "local",
+      runtimeKey: "hermes:zero-qa:cheap",
+      variantLabel: "Hermes QA Cheap",
+      hermesProfile: "zero-qa",
+      hermesModel: "deepseek-v4-flash",
+      purpose: "qa/batch",
+      costTier: "cheap",
+      maxConcurrentTasks: 1,
+    });
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeRegistrations rejects duplicate configured runtime keys", () => {
+  assert.throws(() => buildRuntimeRegistrations({
+    detected: [],
+    runtimeName: "Fei AgentSpace",
+    deviceName: "Build Box",
+    mode: "local",
+    env: {
+      AGENT_SPACE_RUNTIME_VARIANTS_JSON: JSON.stringify([
+        { provider: "hermes", runtimeKey: "hermes:zero-qa" },
+        { provider: "hermes", runtimeKey: "hermes:zero-qa" },
+      ]),
+    },
+  }), /Duplicate runtimeKey "hermes:zero-qa"/);
+});
+
+test("buildRuntimeRegistrations preserves legacy detected-provider behavior without variant config", () => {
+  const binDir = mkdtempSync(join(tmpdir(), "agent-space-runtime-legacy-"));
+  const codexPath = join(binDir, "codex");
+  writeFileSync(codexPath, "#!/bin/sh\necho codex 1.0.0\n", "utf8");
+  chmodSync(codexPath, 0o755);
+
+  try {
+    const registrations = buildRuntimeRegistrations({
+      detected: [{
+        provider: "codex",
+        label: "Codex CLI",
+        executablePath: codexPath,
+        version: "codex 1.0.0",
+      }],
+      runtimeName: "Fei AgentSpace",
+      deviceName: "Build Box",
+      mode: "remote",
+      env: {},
+    });
+
+    assert.equal(registrations.length, 1);
+    const registration = registrations[0];
+    assert.ok(registration);
+    const metadata = registration.metadata;
+    assert.ok(metadata);
+    assert.equal(registration.provider, "codex");
+    assert.equal(registration.runtimeKey, "codex");
+    assert.equal(metadata.runtimeKey, "codex");
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeRegistrations fails fast for invalid runtime variant config", () => {
+  assert.throws(() => buildRuntimeRegistrations({
+    detected: [],
+    runtimeName: "Fei AgentSpace",
+    deviceName: "Build Box",
+    mode: "local",
+    env: {
+      AGENT_SPACE_RUNTIME_VARIANTS_JSON: "{not-json",
+    },
+  }), /AGENT_SPACE_RUNTIME_VARIANTS_JSON is invalid JSON/);
+
+  assert.throws(() => buildRuntimeRegistrations({
+    detected: [],
+    runtimeName: "Fei AgentSpace",
+    deviceName: "Build Box",
+    mode: "local",
+    env: {
+      AGENT_SPACE_RUNTIME_VARIANTS_JSON: JSON.stringify([{ provider: "codex", runtimeKey: " " }]),
+    },
+  }), /missing runtimeKey/);
+});
+
+test("buildRuntimeRegistrations skips unknown providers and missing CLIs when a valid variant remains", () => {
+  const binDir = mkdtempSync(join(tmpdir(), "agent-space-runtime-valid-"));
+  const codexPath = join(binDir, "codex");
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+  writeFileSync(codexPath, "#!/bin/sh\necho codex 1.0.0\n", "utf8");
+  chmodSync(codexPath, 0o755);
+
+  try {
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    const registrations = buildRuntimeRegistrations({
+      detected: [{
+        provider: "codex",
+        label: "Codex CLI",
+        executablePath: codexPath,
+        version: "codex 1.0.0",
+      }],
+      runtimeName: "Fei AgentSpace",
+      deviceName: "Build Box",
+      mode: "remote",
+      env: {
+        AGENT_SPACE_RUNTIME_VARIANTS_JSON: JSON.stringify([
+          { provider: "future-bot", runtimeKey: "future:default" },
+          { provider: "hermes", runtimeKey: "hermes:missing-cli" },
+          { provider: "codex", runtimeKey: "codex:implementation", purpose: "bounded implementation" },
+        ]),
+      },
+    });
+
+    assert.equal(registrations.length, 1);
+    const registration = registrations[0];
+    assert.ok(registration);
+    const metadata = registration.metadata;
+    assert.ok(metadata);
+    assert.equal(registration.runtimeKey, "codex:implementation");
+    assert.equal(metadata.purpose, "bounded implementation");
+    assert.equal(warnings.some((warning) => warning.includes("unsupported provider")), true);
+    assert.equal(warnings.some((warning) => warning.includes("CLI for provider \"hermes\" was not found")), true);
+  } finally {
+    console.warn = originalWarn;
+    rmSync(binDir, { recursive: true, force: true });
   }
 });
 

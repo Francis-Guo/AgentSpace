@@ -11,6 +11,8 @@ import {
   type AgentRouterEvent,
 } from "./agent-router/index.ts";
 
+const HAS_NODE_TYPESCRIPT_STRIP_SUPPORT = detectNodeTypeScriptStripSupport();
+
 test("listAgentRouterHarnesses exposes the MVP native harnesses", () => {
   assert.deepEqual(listAgentRouterHarnesses(), [
     { id: "claude", label: "Claude Code" },
@@ -52,7 +54,7 @@ test("detectAgentRouterHarnesses reports available and missing CLIs", async () =
   }
 });
 
-test("runAgentRouter launches Hermes in headless text mode with model and runtime tool PATH", async () => {
+test("runAgentRouter launches Hermes in headless text mode with profile, model, and runtime tool PATH", async () => {
   const workDir = mkdtempSync(join(tmpdir(), "agent-router-hermes-"));
   const providerBinDir = join(workDir, "provider-bin");
   const toolBinDir = join(workDir, "tool-bin");
@@ -85,6 +87,7 @@ test("runAgentRouter launches Hermes in headless text mode with model and runtim
       prompt: "hello hermes",
       cwd: workDir,
       executablePath: hermesPath,
+      profile: "zero-qa",
       model: "nous-hermes",
       env: {
         HERMES_ARGS_PATH: argsPath,
@@ -105,7 +108,7 @@ test("runAgentRouter launches Hermes in headless text mode with model and runtim
 
     assert.equal(result.status, "completed");
     assert.equal(result.outputText, "hermes text output");
-    assert.deepEqual(args, ["-z", "hello hermes", "--yolo", "--model", "nous-hermes"]);
+    assert.deepEqual(args, ["-z", "hello hermes", "--yolo", "--profile", "zero-qa", "--model", "nous-hermes"]);
     assert.equal(seenPath.includes(toolBinDir), true);
   } finally {
     process.env.PATH = originalPath;
@@ -995,7 +998,7 @@ test("runAgentRouter returns timeout and empty-response diagnostics", async () =
   }
 });
 
-test("agent-router CLI emits JSONL events and result in --json-events mode", () => {
+test("agent-router CLI emits JSONL events and result in --json-events mode", { skip: !HAS_NODE_TYPESCRIPT_STRIP_SUPPORT }, () => {
   const workDir = mkdtempSync(join(tmpdir(), "agent-router-cli-"));
   const binDir = join(workDir, "bin");
   const codexPath = join(binDir, "codex");
@@ -1046,7 +1049,7 @@ test("agent-router CLI emits JSONL events and result in --json-events mode", () 
   }
 });
 
-test("agent-router CLI emits Hermes result JSONL in --json-events mode", () => {
+test("agent-router CLI emits Hermes result JSONL in --json-events mode", { skip: !HAS_NODE_TYPESCRIPT_STRIP_SUPPORT }, () => {
   const workDir = mkdtempSync(join(tmpdir(), "agent-router-cli-hermes-"));
   const binDir = join(workDir, "bin");
   const hermesPath = join(binDir, "hermes");
@@ -1094,4 +1097,13 @@ function writeExecutable(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, "utf8");
   chmodSync(path, 0o755);
+}
+
+function detectNodeTypeScriptStripSupport(): boolean {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--eval", "type Check = string; console.log('ok' satisfies Check);"],
+    { encoding: "utf8" },
+  );
+  return result.status === 0 && result.stdout.includes("ok");
 }

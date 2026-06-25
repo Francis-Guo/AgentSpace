@@ -51,6 +51,9 @@ async function buildHermesLaunch(input: AgentRouterRunRequest): Promise<HarnessL
   }
 
   const args = ["-z", input.prompt, "--yolo"];
+  if (input.profile) {
+    args.push("--profile", input.profile);
+  }
   if (input.model) {
     args.push("--model", input.model);
   }

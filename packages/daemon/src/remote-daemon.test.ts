@@ -4,6 +4,9 @@ import test from "node:test";
 import {
   buildRemoteDaemonConfig,
   buildRemoteDaemonRelaunchCommand,
+  buildRemoteRuntimeHeartbeatMetadata,
+  buildRemoteRuntimeRecords,
+  reconcileRemoteRuntimesWithHeartbeat,
   resolveRemoteTaskProviderSessionId,
 } from "./remote-daemon.ts";
 
@@ -160,4 +163,167 @@ test("resolveRemoteTaskProviderSessionId reads channel session from task payload
   );
   assert.equal(resolveRemoteTaskProviderSessionId(JSON.stringify({ channelSessionId: "" })), undefined);
   assert.equal(resolveRemoteTaskProviderSessionId("{not-json"), undefined);
+});
+
+test("buildRemoteRuntimeRecords reconciles duplicate-provider variants by runtimeKey", () => {
+  const config = buildRemoteDaemonConfig(
+    {
+      "device-name": "Build Box",
+      "runtime-name": "Fei AgentSpace",
+    },
+    {
+      environment: {
+        HOME: "/tmp/daemon-home",
+      },
+    },
+  );
+  const registrations = [
+    {
+      provider: "hermes" as const,
+      runtimeKey: "hermes:zero-qa:cheap",
+      name: "Hermes QA Cheap",
+      version: "hermes 0.2.0",
+      deviceInfo: "Build Box",
+      metadata: {
+        executablePath: "/usr/local/bin/hermes",
+        mode: "remote" as const,
+        runtimeKey: "hermes:zero-qa:cheap",
+        variantLabel: "Hermes QA Cheap",
+        hermesProfile: "zero-qa",
+        hermesModel: "deepseek-v4-flash",
+        purpose: "qa/batch",
+        costTier: "cheap" as const,
+      },
+    },
+    {
+      provider: "hermes" as const,
+      runtimeKey: "hermes:zero-review:gpt-5.5",
+      name: "Hermes Review Premium",
+      version: "hermes 0.2.0",
+      deviceInfo: "Build Box",
+      metadata: {
+        executablePath: "/usr/local/bin/hermes",
+        mode: "remote" as const,
+        runtimeKey: "hermes:zero-review:gpt-5.5",
+        variantLabel: "Hermes Review Premium",
+        hermesProfile: "zero-review",
+        hermesModel: "cliproxy/gpt-5.5",
+        purpose: "review",
+        costTier: "premium" as const,
+      },
+    },
+  ];
+
+  const records = buildRemoteRuntimeRecords(
+    config,
+    {
+      daemon: {
+        daemonKey: "build-box",
+        status: "online",
+        workspaceId: "workspace-1",
+      },
+      runtimes: [
+        {
+          id: "runtime-review",
+          provider: "hermes",
+          runtimeKey: "hermes:zero-review:gpt-5.5",
+          name: "Registered Review",
+          status: "online",
+        },
+        {
+          id: "runtime-qa",
+          provider: "hermes",
+          runtimeKey: "hermes:zero-qa:cheap",
+          name: "Registered QA",
+          status: "online",
+        },
+      ],
+    },
+    registrations,
+  );
+
+  assert.equal(records.length, 2);
+  const qaRuntime = records.find((runtime) => runtime.metadata.runtimeKey === "hermes:zero-qa:cheap");
+  const reviewRuntime = records.find((runtime) => runtime.metadata.runtimeKey === "hermes:zero-review:gpt-5.5");
+  assert.equal(qaRuntime?.id, "runtime-qa");
+  assert.equal(qaRuntime?.metadata.hermesProfile, "zero-qa");
+  assert.equal(qaRuntime?.metadata.hermesModel, "deepseek-v4-flash");
+  assert.equal(reviewRuntime?.id, "runtime-review");
+  assert.equal(reviewRuntime?.metadata.hermesProfile, "zero-review");
+  assert.equal(reviewRuntime?.metadata.hermesModel, "cliproxy/gpt-5.5");
+});
+
+test("remote runtime heartbeat metadata preserves variant identity and profile details", () => {
+  const runtimes = [
+    {
+      id: "runtime-qa",
+      workspaceId: "workspace-1",
+      provider: "hermes" as const,
+      name: "Hermes QA Cheap",
+      version: "hermes 0.2.0",
+      status: "online" as const,
+      deviceInfo: "Build Box",
+      metadata: {
+        executablePath: "/usr/local/bin/hermes",
+        mode: "remote" as const,
+        runtimeKey: "hermes:zero-qa:cheap",
+        variantLabel: "Hermes QA Cheap",
+        hermesProfile: "zero-qa",
+        hermesModel: "deepseek-v4-flash",
+        purpose: "qa/batch",
+        costTier: "cheap" as const,
+      },
+    },
+    {
+      id: "runtime-review",
+      workspaceId: "workspace-1",
+      provider: "hermes" as const,
+      name: "Hermes Review Premium",
+      version: "hermes 0.2.0",
+      status: "online" as const,
+      deviceInfo: "Build Box",
+      metadata: {
+        executablePath: "/usr/local/bin/hermes",
+        mode: "remote" as const,
+        runtimeKey: "hermes:zero-review:gpt-5.5",
+        variantLabel: "Hermes Review Premium",
+        hermesProfile: "zero-review",
+        hermesModel: "cliproxy/gpt-5.5",
+      },
+    },
+  ];
+
+  const heartbeatMetadata = buildRemoteRuntimeHeartbeatMetadata(runtimes);
+
+  assert.deepEqual(
+    heartbeatMetadata.map((runtime) => runtime.metadata.runtimeKey),
+    ["hermes:zero-qa:cheap", "hermes:zero-review:gpt-5.5"],
+  );
+  assert.equal(heartbeatMetadata[0]?.metadata.hermesProfile, "zero-qa");
+  assert.equal(heartbeatMetadata[0]?.metadata.hermesModel, "deepseek-v4-flash");
+
+  const reconciled = reconcileRemoteRuntimesWithHeartbeat(runtimes, {
+    daemon: {
+      daemonKey: "build-box",
+      status: "online",
+      workspaceId: "workspace-1",
+    },
+    runtimes: [
+      {
+        id: "runtime-qa",
+        provider: "hermes",
+        runtimeKey: "hermes:zero-qa:cheap",
+        status: "online",
+        metadata: {
+          providerHealth: { providerUsable: "usable" },
+        },
+      },
+    ],
+  });
+
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0]?.id, "runtime-qa");
+  assert.equal(reconciled[0]?.metadata.runtimeKey, "hermes:zero-qa:cheap");
+  assert.equal(reconciled[0]?.metadata.hermesProfile, "zero-qa");
+  assert.deepEqual(reconciled[0]?.metadata.providerHealth, { providerUsable: "usable" });
 });

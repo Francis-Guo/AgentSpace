@@ -76,13 +76,20 @@ export function registerDaemonRuntimesSync(input: {
       now,
     );
 
-    const seenProviders = new Set<string>();
+    const seenRuntimeKeys = new Set<string>();
     for (const runtime of input.runtimes) {
       const provider = runtime.provider.trim();
       if (!provider) {
         continue;
       }
-      seenProviders.add(provider);
+      const runtimeKey = normalizeRuntimeKey(runtime.runtimeKey, provider);
+      if (!runtimeKey) {
+        continue;
+      }
+      if (seenRuntimeKeys.has(runtimeKey)) {
+        throw new Error(`Duplicate runtimeKey "${runtimeKey}" in daemon registration.`);
+      }
+      seenRuntimeKeys.add(runtimeKey);
 
       const existingRuntime = db
         .prepare(
@@ -90,9 +97,9 @@ export function registerDaemonRuntimesSync(input: {
             id,
             created_at AS createdAt
           FROM agent_runtime
-          WHERE workspace_id = ? AND daemon_connection_id = ? AND provider = ?`,
+          WHERE workspace_id = ? AND daemon_connection_id = ? AND runtime_key = ?`,
         )
-        .get(workspaceId, daemonId, provider) as Record<string, unknown> | undefined;
+        .get(workspaceId, daemonId, runtimeKey) as Record<string, unknown> | undefined;
       const runtimeId =
         existingRuntime && typeof existingRuntime.id === "string"
           ? existingRuntime.id
@@ -107,6 +114,7 @@ export function registerDaemonRuntimesSync(input: {
           workspace_id,
           daemon_connection_id,
           provider,
+          runtime_key,
           name,
           version,
           status,
@@ -116,9 +124,10 @@ export function registerDaemonRuntimesSync(input: {
           last_heartbeat_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(workspace_id, daemon_connection_id, provider) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id, daemon_connection_id, runtime_key) DO UPDATE SET
           name = excluded.name,
+          provider = excluded.provider,
           version = excluded.version,
           status = 'online',
           device_info = excluded.device_info,
@@ -132,6 +141,7 @@ export function registerDaemonRuntimesSync(input: {
         workspaceId,
         daemonId,
         provider,
+        runtimeKey,
         runtime.name.trim(),
         version,
         deviceInfo,
@@ -145,16 +155,16 @@ export function registerDaemonRuntimesSync(input: {
 
     const runtimeRows = db
       .prepare(
-        `SELECT id, provider
+        `SELECT id, runtime_key AS runtimeKey
          FROM agent_runtime
          WHERE workspace_id = ? AND daemon_connection_id = ?`,
       )
       .all(workspaceId, daemonId) as Array<Record<string, unknown>>;
     for (const row of runtimeRows) {
-      if (typeof row.provider !== "string") {
+      if (typeof row.runtimeKey !== "string") {
         continue;
       }
-      if (seenProviders.has(row.provider)) {
+      if (seenRuntimeKeys.has(row.runtimeKey)) {
         continue;
       }
       if (typeof row.id !== "string") {
@@ -177,6 +187,7 @@ export function heartbeatDaemonSync(daemonKey: string, options?: {
   metadata?: Record<string, unknown>;
   runtimes?: Array<{
     id?: string;
+    runtimeKey?: string;
     provider?: string;
     metadata?: Record<string, unknown>;
   }>;
@@ -221,17 +232,11 @@ export function heartbeatDaemonSync(daemonKey: string, options?: {
       if (!runtime.metadata || !isRecord(runtime.metadata)) {
         continue;
       }
-      const selectors: string[] = ["daemon_connection_id = ?"];
-      const params: unknown[] = [daemon.id];
-      if (runtime.id?.trim()) {
-        selectors.push("id = ?");
-        params.push(runtime.id.trim());
-      } else if (runtime.provider?.trim()) {
-        selectors.push("provider = ?");
-        params.push(runtime.provider.trim());
-      } else {
+      const selector = resolveRuntimeHeartbeatSelector(db, daemon.id, runtime);
+      if (!selector) {
         continue;
       }
+      const { selectors, params } = selector;
 
       const row = db.prepare(
         `SELECT metadata_json AS metadataJson
@@ -252,6 +257,49 @@ export function heartbeatDaemonSync(daemonKey: string, options?: {
   return readDaemonSnapshotSync(daemonKey);
 }
 
+function resolveRuntimeHeartbeatSelector(
+  db: ReturnType<typeof getDatabase>,
+  daemonId: string,
+  runtime: {
+    id?: string;
+    runtimeKey?: string;
+    provider?: string;
+  },
+): { selectors: string[]; params: unknown[] } | null {
+  const selectors: string[] = ["daemon_connection_id = ?"];
+  const params: unknown[] = [daemonId];
+  const runtimeId = runtime.id?.trim();
+  if (runtimeId) {
+    selectors.push("id = ?");
+    params.push(runtimeId);
+    return { selectors, params };
+  }
+
+  const runtimeKey = runtime.runtimeKey?.trim();
+  if (runtimeKey) {
+    selectors.push("runtime_key = ?");
+    params.push(runtimeKey);
+    return { selectors, params };
+  }
+
+  const provider = runtime.provider?.trim();
+  if (!provider) {
+    return null;
+  }
+
+  const matches = db.prepare(
+    `SELECT id
+     FROM agent_runtime
+     WHERE daemon_connection_id = ? AND provider = ?`,
+  ).all(daemonId, provider) as Array<{ id?: unknown }>;
+  if (matches.length !== 1 || typeof matches[0]?.id !== "string") {
+    return null;
+  }
+  selectors.push("id = ?");
+  params.push(matches[0].id);
+  return { selectors, params };
+}
+
 function parseMetadataJson(value: unknown): Record<string, unknown> {
   if (typeof value !== "string") {
     return {};
@@ -262,6 +310,11 @@ function parseMetadataJson(value: unknown): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function normalizeRuntimeKey(runtimeKey: string | undefined, provider: string): string {
+  const normalized = runtimeKey?.trim();
+  return normalized || provider.trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -323,6 +376,7 @@ export function readAgentRuntimeSync(runtimeId: string): AgentRuntimeRecord | nu
         workspace_id AS workspaceId,
         daemon_connection_id AS daemonConnectionId,
         provider,
+        runtime_key AS runtimeKey,
         name,
         version,
         status,
@@ -394,6 +448,7 @@ export function listDaemonSnapshotsSync(workspaceId?: string): RegisteredDaemonS
         workspace_id AS workspaceId,
         daemon_connection_id AS daemonConnectionId,
         provider,
+        runtime_key AS runtimeKey,
         name,
         version,
         status,
@@ -406,7 +461,7 @@ export function listDaemonSnapshotsSync(workspaceId?: string): RegisteredDaemonS
         updated_at AS updatedAt
       FROM agent_runtime
       ${hasWorkspaceId ? "WHERE workspace_id = ?" : ""}
-      ORDER BY daemon_connection_id ASC, provider ASC`,
+      ORDER BY daemon_connection_id ASC, runtime_key ASC`,
     )
     .all(...(hasWorkspaceId ? [workspaceId] : [])) as Array<Record<string, unknown>>;
   const runtimesByDaemonId = new Map<string, AgentRuntimeRecord[]>();
@@ -486,6 +541,7 @@ function listDaemonRuntimesSync(daemonConnectionId: string): AgentRuntimeRecord[
         workspace_id AS workspaceId,
         daemon_connection_id AS daemonConnectionId,
         provider,
+        runtime_key AS runtimeKey,
         name,
         version,
         status,
@@ -498,7 +554,7 @@ function listDaemonRuntimesSync(daemonConnectionId: string): AgentRuntimeRecord[
         updated_at AS updatedAt
       FROM agent_runtime
       WHERE daemon_connection_id = ?
-      ORDER BY provider ASC`,
+      ORDER BY runtime_key ASC`,
     )
     .all(daemonConnectionId) as Array<Record<string, unknown>>;
 
@@ -539,6 +595,7 @@ function mapAgentRuntimeRecord(value: Record<string, unknown>): AgentRuntimeReco
     typeof value.id !== "string" ||
     typeof value.workspaceId !== "string" ||
     !isDaemonProvider(value.provider as string) ||
+    typeof value.runtimeKey !== "string" ||
     typeof value.name !== "string" ||
     typeof value.version !== "string" ||
     (value.status !== "online" && value.status !== "offline") ||
@@ -555,6 +612,7 @@ function mapAgentRuntimeRecord(value: Record<string, unknown>): AgentRuntimeReco
     workspaceId: value.workspaceId,
     daemonConnectionId: typeof value.daemonConnectionId === "string" ? value.daemonConnectionId : undefined,
     provider: value.provider as AgentRuntimeRecord["provider"],
+    runtimeKey: value.runtimeKey,
     name: value.name,
     version: value.version,
     status: value.status,

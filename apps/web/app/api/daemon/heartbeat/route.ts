@@ -28,6 +28,7 @@ export async function POST(request: Request): Promise<Response> {
           .filter((runtime) => runtime && isRecord(runtime))
           .map((runtime) => ({
             id: typeof runtime.id === "string" ? runtime.id : undefined,
+            runtimeKey: typeof runtime.runtimeKey === "string" ? runtime.runtimeKey : undefined,
             provider: typeof runtime.provider === "string" ? runtime.provider : undefined,
             metadata: isRecord(runtime.metadata) ? runtime.metadata : undefined,
           }))
@@ -43,6 +44,7 @@ export async function POST(request: Request): Promise<Response> {
     runtimes: snapshot.runtimes.map((runtime) => ({
       id: runtime.id,
       provider: runtime.provider,
+      runtimeKey: runtime.runtimeKey,
       status: runtime.status,
       lastHeartbeatAt: runtime.lastHeartbeatAt,
       metadata: safeParseRecord(runtime.metadataJson),

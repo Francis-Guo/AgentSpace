@@ -256,6 +256,7 @@ const NORMALIZED_ROW_KEY_ALIASES = new Map([
   ["revokedat", "revokedAt"],
   ["runtimeid", "runtimeId"],
   ["runtimeappid", "runtimeAppId"],
+  ["runtimekey", "runtimeKey"],
   ["runtimename", "runtimeName"],
   ["routersessionid", "routerSessionId"],
   ["runid", "runId"],

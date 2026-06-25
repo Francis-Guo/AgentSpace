@@ -118,6 +118,47 @@ describe("agent actions", () => {
     });
   });
 
+  it("creates an agent from a Zero template with template origin and preloaded skills", async () => {
+    mockResolveSystemAgentTemplateForWorkspaceSync.mockReturnValue({
+      template: {
+        id: "zero-qa-engineer",
+        version: 1,
+        category: "quality",
+        displayName: "Zero QA 测试 Agent",
+        shortDescription: "Tests runtime variant workflows.",
+        defaultAgentName: "zero-qa-engineer",
+        defaultRemarkName: "Zero QA 测试",
+        defaultTitle: "QA/Test Engineer",
+        summary: "Designs deterministic tests for Zero worker flows.",
+        fit: "Best for fake provider E2E and acceptance checks.",
+        traits: ["zero-team", "qa"],
+        instructions: "Role\nQA/Test Engineer",
+        skillRecommendations: [],
+        preferredRuntimePurpose: "qa",
+        preferredProvider: "hermes",
+        preferredCostTier: "cheap",
+      },
+      skillIds: ["skill-test"],
+      skillMatches: [],
+    });
+
+    await createWorkspaceAgentAction({
+      name: "",
+      remarkName: "",
+      templateId: "zero-qa-engineer",
+    });
+
+    expect(mockResolveSystemAgentTemplateForWorkspaceSync).toHaveBeenCalledWith("zero-qa-engineer", "workspace-1");
+    expect(mockCreateEmployeeSync).toHaveBeenCalledWith(expect.objectContaining({
+      name: "zero-qa-engineer",
+      role: "QA/Test Engineer",
+      remarkName: "Zero QA 测试",
+      origin: "agent-template:zero-qa-engineer:v1",
+      skillIds: ["skill-test"],
+      active: true,
+    }), "workspace-1");
+  });
+
   it("returns an invalidation hint when creating a task", async () => {
     const result = await createWorkspaceTaskAction({
       title: "Plan Osaka",

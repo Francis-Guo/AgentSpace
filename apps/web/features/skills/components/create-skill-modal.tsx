@@ -1,4 +1,8 @@
-import { SYSTEM_AGENT_TEMPLATE_PRESETS, type AgentTemplateSkillRecommendation } from "@agent-space/domain";
+import {
+  SYSTEM_AGENT_TEMPLATE_PRESETS,
+  type AgentTemplateCategory,
+  type AgentTemplateSkillRecommendation,
+} from "@agent-space/domain";
 import { useMemo, useState } from "react";
 import { useLanguage } from "@/features/i18n/language-provider";
 import { getField } from "@/shared/lib/form";
@@ -12,6 +16,8 @@ interface CreateSkillModalProps {
   readonly onImportPreset?: (input: { url: string; conflict: "rename" }) => void;
 }
 
+type SkillPresetCategoryFilter = "all" | AgentTemplateCategory;
+
 export function CreateSkillModal({
   pending,
   onCancel,
@@ -22,7 +28,7 @@ export function CreateSkillModal({
   const { surfaceRef, handleBackdropMouseDown, labelId, descriptionId } = useDialogSurface<HTMLFormElement>(onCancel);
   const [mode, setMode] = useState<"preset" | "blank">("preset");
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<"all" | "finance" | "product" | "design">("all");
+  const [category, setCategory] = useState<SkillPresetCategoryFilter>("all");
   const [draft, setDraft] = useState({ name: "", description: "" });
   const skillPresets = useMemo(() => buildSkillPresetCards(), []);
   const filteredPresets = useMemo(() => {
@@ -102,12 +108,7 @@ export function CreateSkillModal({
             <div className="skill-preset-market" aria-label={tx("Skill 预设市场", "Skill preset marketplace")}>
               <div className="agent-template-market__toolbar">
                 <div className="agent-template-market__tabs" aria-label={tx("预设分类", "Preset categories")} role="tablist">
-                  {([
-                    ["all", tx("全部", "All")],
-                    ["finance", tx("金融", "Finance")],
-                    ["product", tx("产品", "Product")],
-                    ["design", tx("设计", "Design")],
-                  ] as const).map(([value, label]) => (
+                  {buildSkillPresetCategoryTabs(tx).map(([value, label]) => (
                     <button
                       aria-selected={category === value}
                       className={`agent-template-market__tab${category === value ? " agent-template-market__tab--active" : ""}`}
@@ -216,7 +217,7 @@ export function CreateSkillModal({
 interface SkillPresetCard {
   key: string;
   label: string;
-  category: "finance" | "product" | "design";
+  category: AgentTemplateCategory;
   templateName: string;
   sourceType: AgentTemplateSkillRecommendation["sourceType"];
   sourceUrl: string;
@@ -249,7 +250,25 @@ function translatePresetCategory(
   if (category === "product") {
     return tx("产品", "Product");
   }
-  return tx("设计", "Design");
+  if (category === "design") {
+    return tx("设计", "Design");
+  }
+  if (category === "engineering") {
+    return tx("工程", "Engineering");
+  }
+  if (category === "quality") {
+    return tx("质量", "Quality");
+  }
+  if (category === "operations") {
+    return tx("运维", "Operations");
+  }
+  if (category === "security") {
+    return tx("安全", "Security");
+  }
+  if (category === "research") {
+    return tx("研究", "Research");
+  }
+  return tx("文档", "Documentation");
 }
 
 function iconForSkillPresetCategory(category: SkillPresetCard["category"]): "costs" | "taskBoard" | "templates" {
@@ -260,4 +279,21 @@ function iconForSkillPresetCategory(category: SkillPresetCard["category"]): "cos
     return "taskBoard";
   }
   return "templates";
+}
+
+function buildSkillPresetCategoryTabs(
+  tx: (zh: string, en: string) => string,
+): Array<readonly [SkillPresetCategoryFilter, string]> {
+  return [
+    ["all", tx("全部", "All")],
+    ["finance", tx("金融", "Finance")],
+    ["product", tx("产品", "Product")],
+    ["design", tx("设计", "Design")],
+    ["engineering", tx("工程", "Engineering")],
+    ["quality", tx("质量", "Quality")],
+    ["operations", tx("运维", "Operations")],
+    ["security", tx("安全", "Security")],
+    ["research", tx("研究", "Research")],
+    ["documentation", tx("文档", "Documentation")],
+  ];
 }

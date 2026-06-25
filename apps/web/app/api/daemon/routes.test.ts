@@ -258,6 +258,78 @@ describe("daemon API routes", () => {
     expect(payload.error).toMatch(/unsupported provider/i);
   });
 
+  it("registers duplicate-provider runtimes when runtime keys are distinct", async () => {
+    const daemonToken = createDaemonApiTokenSync({
+      label: "remote-daemon",
+      createdBy: "Tianyu",
+    });
+
+    const response = await registerPOST(
+      new Request("http://localhost/api/daemon/register", {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+        body: JSON.stringify({
+          daemonKey: "variant-box",
+          deviceName: "Build Box 1",
+          runtimes: [
+            {
+              provider: "hermes",
+              runtimeKey: "hermes:zero-qa:cheap",
+              name: "Hermes QA Cheap",
+              version: "test",
+              metadata: { hermesProfile: "zero-qa", hermesModel: "deepseek-v4-flash" },
+            },
+            {
+              provider: "hermes",
+              runtimeKey: "hermes:zero-review:gpt-5.5",
+              name: "Hermes Review Premium",
+              version: "test",
+              metadata: { hermesProfile: "zero-review", hermesModel: "cliproxy/gpt-5.5" },
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.runtimes).toHaveLength(2);
+    expect(payload.runtimes.map((runtime: { runtimeKey: string }) => runtime.runtimeKey).sort()).toEqual([
+      "hermes:zero-qa:cheap",
+      "hermes:zero-review:gpt-5.5",
+    ]);
+    expect(listDaemonSnapshotsSync()[0]?.runtimes.map((runtime) => runtime.runtimeKey).sort()).toEqual([
+      "hermes:zero-qa:cheap",
+      "hermes:zero-review:gpt-5.5",
+    ]);
+  });
+
+  it("rejects duplicate runtime keys in daemon registration", async () => {
+    const daemonToken = createDaemonApiTokenSync({
+      label: "remote-daemon",
+      createdBy: "Tianyu",
+    });
+
+    const response = await registerPOST(
+      new Request("http://localhost/api/daemon/register", {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+        body: JSON.stringify({
+          daemonKey: "duplicate-variant-box",
+          deviceName: "Build Box 1",
+          runtimes: [
+            { provider: "hermes", runtimeKey: "hermes:zero-qa", name: "Hermes QA" },
+            { provider: "hermes", runtimeKey: "hermes:zero-qa", name: "Hermes QA Duplicate" },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/Duplicate runtimeKey "hermes:zero-qa"/);
+  });
+
   it("registers and heartbeats a remote daemon with daemon token auth", async () => {
     const daemonToken = createDaemonApiTokenSync({
       label: "remote-daemon",
@@ -428,6 +500,161 @@ describe("daemon API routes", () => {
         .map((runtime: { provider: string }) => runtime.provider)
         .sort(),
     ).toEqual(["hermes", "nanobot", "opencode", "openclaw"].sort());
+  });
+
+  it("claims a bound task only from the intended runtime variant", async () => {
+    const daemonToken = createDaemonApiTokenSync({
+      label: "remote-daemon",
+      createdBy: "Tianyu",
+    });
+
+    const registerResponse = await registerPOST(
+      new Request("http://localhost/api/daemon/register", {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+        body: JSON.stringify({
+          daemonKey: "hermes-variant-box",
+          deviceName: "Build Box 2",
+          runtimes: [
+            {
+              provider: "hermes",
+              runtimeKey: "hermes:zero-qa:cheap",
+              name: "Hermes QA Cheap",
+              version: "test",
+            },
+            {
+              provider: "hermes",
+              runtimeKey: "hermes:zero-review:gpt-5.5",
+              name: "Hermes Review Premium",
+              version: "test",
+            },
+          ],
+        }),
+      }),
+    );
+    const registerPayload = await registerResponse.json();
+    const qaRuntime = registerPayload.runtimes.find((runtime: { runtimeKey: string }) => runtime.runtimeKey === "hermes:zero-qa:cheap");
+    const reviewRuntime = registerPayload.runtimes.find((runtime: { runtimeKey: string }) => runtime.runtimeKey === "hermes:zero-review:gpt-5.5");
+
+    createEmployeeSync({ name: "Quinn", role: "QA/Test Engineer" });
+    addChannelEmployeesSync({ channelName: "tour visit", employeeNames: ["Quinn"] });
+    bindEmployeeRuntimeSync("Quinn", qaRuntime.id);
+    const queued = enqueueNativeTaskSync({
+      assignee: "Quinn",
+      title: "Verify runtime routing",
+      priority: "medium",
+      triggerType: "manual",
+    });
+
+    const wrongClaimResponse = await claimPOST(
+      new Request(`http://localhost/api/daemon/runtimes/${reviewRuntime.id}/tasks/claim`, {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+      }),
+      { params: Promise.resolve({ runtimeId: reviewRuntime.id }) },
+    );
+    const wrongClaimPayload = await wrongClaimResponse.json();
+    const rightClaimResponse = await claimPOST(
+      new Request(`http://localhost/api/daemon/runtimes/${qaRuntime.id}/tasks/claim`, {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+      }),
+      { params: Promise.resolve({ runtimeId: qaRuntime.id }) },
+    );
+    const rightClaimPayload = await rightClaimResponse.json();
+
+    expect(registerResponse.status).toBe(200);
+    expect(wrongClaimResponse.status).toBe(200);
+    expect(wrongClaimPayload.task).toBeNull();
+    expect(rightClaimResponse.status).toBe(200);
+    expect(rightClaimPayload.task.id).toBe(queued?.id);
+    expect(rightClaimPayload.task.runtimeId).toBe(qaRuntime.id);
+  });
+
+  it("lets two Hermes variants claim their own queued tasks independently", async () => {
+    const daemonToken = createDaemonApiTokenSync({
+      label: "remote-daemon",
+      createdBy: "Tianyu",
+    });
+
+    const registerResponse = await registerPOST(
+      new Request("http://localhost/api/daemon/register", {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+        body: JSON.stringify({
+          daemonKey: "hermes-independent-variants",
+          deviceName: "Build Box 3",
+          runtimes: [
+            {
+              provider: "hermes",
+              runtimeKey: "hermes:zero-qa:cheap",
+              name: "Hermes QA Cheap",
+              version: "test",
+              metadata: { maxConcurrentTasks: 1 },
+            },
+            {
+              provider: "hermes",
+              runtimeKey: "hermes:zero-review:gpt-5.5",
+              name: "Hermes Review Premium",
+              version: "test",
+              metadata: { maxConcurrentTasks: 1 },
+            },
+          ],
+        }),
+      }),
+    );
+    const registerPayload = await registerResponse.json();
+    const qaRuntime = registerPayload.runtimes.find((runtime: { runtimeKey: string }) => runtime.runtimeKey === "hermes:zero-qa:cheap");
+    const reviewRuntime = registerPayload.runtimes.find((runtime: { runtimeKey: string }) => runtime.runtimeKey === "hermes:zero-review:gpt-5.5");
+
+    createEmployeeSync({ name: "Quinn", role: "QA/Test Engineer" });
+    createEmployeeSync({ name: "Vera", role: "Code Reviewer" });
+    bindEmployeeRuntimeSync("Quinn", qaRuntime.id);
+    bindEmployeeRuntimeSync("Vera", reviewRuntime.id);
+    const qaTask = enqueueNativeTaskSync({
+      assignee: "Quinn",
+      title: "Run QA checks",
+      priority: "medium",
+      triggerType: "manual",
+    });
+    const reviewTask = enqueueNativeTaskSync({
+      assignee: "Vera",
+      title: "Review implementation",
+      priority: "medium",
+      triggerType: "manual",
+    });
+
+    const qaClaimResponse = await claimPOST(
+      new Request(`http://localhost/api/daemon/runtimes/${qaRuntime.id}/tasks/claim`, {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+      }),
+      { params: Promise.resolve({ runtimeId: qaRuntime.id }) },
+    );
+    const qaClaimPayload = await qaClaimResponse.json();
+    const reviewClaimResponse = await claimPOST(
+      new Request(`http://localhost/api/daemon/runtimes/${reviewRuntime.id}/tasks/claim`, {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+      }),
+      { params: Promise.resolve({ runtimeId: reviewRuntime.id }) },
+    );
+    const reviewClaimPayload = await reviewClaimResponse.json();
+    const secondQaClaimResponse = await claimPOST(
+      new Request(`http://localhost/api/daemon/runtimes/${qaRuntime.id}/tasks/claim`, {
+        method: "POST",
+        headers: daemonHeaders(daemonToken.token),
+      }),
+      { params: Promise.resolve({ runtimeId: qaRuntime.id }) },
+    );
+    const secondQaClaimPayload = await secondQaClaimResponse.json();
+
+    expect(registerResponse.status).toBe(200);
+    expect(qaClaimPayload.task.id).toBe(qaTask?.id);
+    expect(qaClaimPayload.task.runtimeId).toBe(qaRuntime.id);
+    expect(reviewClaimPayload.task.id).toBe(reviewTask?.id);
+    expect(reviewClaimPayload.task.runtimeId).toBe(reviewRuntime.id);
+    expect(secondQaClaimPayload.task).toBeNull();
   });
 
   it("claims a queued task and builds an input bundle with prompt and attachment files", async () => {

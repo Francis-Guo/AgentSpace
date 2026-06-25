@@ -1,4 +1,4 @@
-export const POSTGRES_SCHEMA_VERSION = "18";
+export const POSTGRES_SCHEMA_VERSION = "19";
 
 export const POSTGRES_TABLE_NAMES = [
   "app_metadata",
@@ -382,6 +382,7 @@ export function getPostgresSchemaStatements(): string[] {
         workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
         daemon_connection_id TEXT REFERENCES daemon_connection(id) ON DELETE SET NULL,
         provider TEXT NOT NULL,
+        runtime_key TEXT NOT NULL DEFAULT '',
         name TEXT NOT NULL,
         version TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'offline',
@@ -393,6 +394,23 @@ export function getPostgresSchemaStatements(): string[] {
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL
       )
+    `,
+    `
+      ALTER TABLE agent_runtime
+        ADD COLUMN IF NOT EXISTS runtime_key TEXT
+    `,
+    `
+      UPDATE agent_runtime
+      SET runtime_key = provider
+      WHERE runtime_key IS NULL OR btrim(runtime_key) = ''
+    `,
+    `
+      ALTER TABLE agent_runtime
+        ALTER COLUMN runtime_key SET DEFAULT ''
+    `,
+    `
+      ALTER TABLE agent_runtime
+        ALTER COLUMN runtime_key SET NOT NULL
     `,
     `
       CREATE TABLE IF NOT EXISTS workspace_runtime_display_name (
@@ -1057,7 +1075,14 @@ export function getPostgresSchemaStatements(): string[] {
         ON session(user_id)
     `,
     `
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtime_workspace_daemon_provider
+      DROP INDEX IF EXISTS idx_agent_runtime_workspace_daemon_provider
+    `,
+    `
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtime_workspace_daemon_runtime_key
+        ON agent_runtime(workspace_id, daemon_connection_id, runtime_key)
+    `,
+    `
+      CREATE INDEX IF NOT EXISTS idx_agent_runtime_workspace_daemon_provider
         ON agent_runtime(workspace_id, daemon_connection_id, provider)
     `,
     `
