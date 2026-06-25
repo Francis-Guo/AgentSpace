@@ -2505,9 +2505,7 @@ export function getAgentsPageData(input: string | AgentsPageDataOptions = DEFAUL
   const canConnectRuntimes = canManageRuntimes || currentMembershipRole === "member";
   const state = readWorkspaceStateCached(workspaceId);
   const workspaceSkills = listWorkspaceSkillsCached(workspaceId);
-  const workspaceSkillSummaries = shouldUseLoadtestDashboardPayloadLimits()
-    ? workspaceSkills.map(summarizeWorkspaceSkillForAgentPage)
-    : workspaceSkills;
+  const workspaceSkillSummaries = workspaceSkills.map(summarizeWorkspaceSkillForAgentPage);
   const workspaceSkillIndex = new Map(workspaceSkillSummaries.map((skill) => [skill.id, skill]));
   const skillIdsByAgentId = listEmployeeSkillIdsByAgentIdMapSync(workspaceId);
   const knowledgePolicies = listKnowledgeAssignmentPoliciesCached(workspaceId);
@@ -2708,6 +2706,8 @@ function summarizeWorkspaceSkillForAgentPage(skill: WorkspaceSkill): WorkspaceSk
     ...skill,
     files: skill.files.map((file) => ({
       ...file,
+      // List/detail views only need file metadata and counts. Loading every SKILL.md
+      // body into the agents/skills module payload made manager views hundreds of MB.
       content: "",
     })),
   };

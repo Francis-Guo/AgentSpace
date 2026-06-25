@@ -154,6 +154,7 @@ describe("dashboard data", () => {
   const skill = createWorkspaceSkillSync({
     name: "research-pack",
     description: "Research helper",
+    content: "# Research Pack\n\n" + "x".repeat(10_000),
   });
   setEmployeeSkillIdsSync("Planner", [skill.id]);
 
@@ -176,12 +177,18 @@ describe("dashboard data", () => {
   expect(
     skillsPage.agents.find((agent) => agent.internalName === "Planner")?.skillIds,
   ).toEqual([skill.id]);
+  expect(skillsPage.skills.find((item) => item.id === skill.id)?.files[0]?.content).toContain("x");
 
   const agentsPage = getAgentsPageData();
-  expect(agentsPage.workspaceSkills.some((item) => item.id === skill.id)).toBe(true);
+  const agentsPageSkill = agentsPage.workspaceSkills.find((item) => item.id === skill.id);
+  expect(agentsPageSkill).toBeTruthy();
+  expect(agentsPageSkill?.files[0]?.content).toBe("");
   expect(
     agentsPage.agents.find((agent) => agent.internalName === "Planner")?.skills.map((item) => item.id),
   ).toEqual([skill.id]);
+  expect(
+    agentsPage.agents.find((agent) => agent.internalName === "Planner")?.skills[0]?.files[0]?.content,
+  ).toBe("");
   });
 
   it("filters daemon snapshots and tokens by workspace", () => {
