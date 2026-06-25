@@ -132,9 +132,10 @@ describe("remote daemon client integration", () => {
     writeFileSync(
       hermesPath,
       [
-        "#!/bin/sh",
-        "printf '%s\\n' \"$@\" > \"$HERMES_ARGS_PATH\"",
-        "printf '%s\\n' 'qa hermes output'",
+        "#!/usr/bin/env node",
+        "const { writeFileSync } = require('node:fs');",
+        "writeFileSync(process.env.HERMES_ARGS_PATH, JSON.stringify(process.argv.slice(2)), 'utf8');",
+        "process.stdout.write('qa hermes output\\n');",
       ].join("\n"),
       "utf8",
     );
@@ -244,7 +245,7 @@ describe("remote daemon client integration", () => {
         workDir,
       });
 
-      const args = readFileSync(argsPath, "utf8").trim().split(/\r?\n/);
+      const args = JSON.parse(readFileSync(argsPath, "utf8")) as string[];
       expect(args.slice(0, 3)).toEqual(["-z", inputBundle.prompt, "--yolo"]);
       expect(args.slice(3)).toEqual(["--profile", "zero-qa", "--model", "deepseek-v4-flash"]);
       expect(result.output).toBe("qa hermes output");
@@ -262,8 +263,8 @@ describe("remote daemon client integration", () => {
       expect(attemptRuntimeMetadata.hermesProfile).toBe("zero-qa");
       expect(attemptRuntimeMetadata.hermesModel).toBe("deepseek-v4-flash");
 
-      const state = readWorkspaceStateSync();
-      expect(state.messages.some((message) => message.role === "agent" && message.summary === "qa hermes output")).toBe(true);
+      const messages = listTaskMessagesForTaskSync(claimed.task.id);
+      expect(messages.some((message: { type?: string; content?: string }) => message.type === "text" && message.content === "qa hermes output")).toBe(true);
     } finally {
       restoreFetch();
     }

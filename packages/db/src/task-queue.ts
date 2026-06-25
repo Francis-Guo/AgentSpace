@@ -861,11 +861,11 @@ function selectFallbackQueuedTaskForRuntime(
   const rows = db.prepare(
     `SELECT
        q.id,
-       q.runtime_id AS runtimeId,
-       q.workspace_id AS workspaceId,
-       q.requested_by_user_id AS requestedByUserId,
-       r.status AS selectedRuntimeStatus,
-       r.provider AS selectedProvider
+       q.runtime_id AS runtime_id,
+       q.workspace_id AS workspace_id,
+       q.requested_by_user_id AS requested_by_user_id,
+       r.status AS selected_runtime_status,
+       r.provider AS selected_provider
      FROM agent_task_queue q
      JOIN agent_runtime r ON r.id = q.runtime_id
      WHERE q.status = 'queued'
