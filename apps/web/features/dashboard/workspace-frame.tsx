@@ -33,6 +33,7 @@ import { canUseWorkspaceClientModule } from "@/features/dashboard/workspace-work
 import {
   buildWorkspaceModuleDataQuery,
   parseWorkspaceModuleHref,
+  type WorkspaceModuleId,
 } from "@/features/dashboard/workspace-module-route";
 import {
   markWorkspaceModuleNavigationClick,
@@ -270,12 +271,13 @@ function WorkspaceFrameContent({
     router.push(href);
     setMobileSidebarOpen(false);
   }, [router]);
-  const prefetchWorkspaceModuleHref = useCallback((href: string) => {
+  const prefetchWorkspaceModuleHref = useCallback((href: string, options?: { automatic?: boolean }) => {
     const parsedRouteState = parseWorkspaceModuleHref(href);
     if (
       !canUseWorkspaceClientModule(parsedRouteState.moduleId) ||
       (parsedRouteState.workspaceSlug && parsedRouteState.workspaceSlug !== currentWorkspace.slug) ||
-      !isWorkspaceModuleLoaderId(parsedRouteState.moduleId)
+      !isWorkspaceModuleLoaderId(parsedRouteState.moduleId) ||
+      (options?.automatic === true && isHeavyweightWorkspaceModule(parsedRouteState.moduleId))
     ) {
       return;
     }
@@ -331,7 +333,7 @@ function WorkspaceFrameContent({
           continue;
         }
         prefetchedHrefs.add(entry.target.href);
-        prefetchWorkspaceModuleHref(entry.target.href);
+        prefetchWorkspaceModuleHref(entry.target.href, { automatic: true });
       }
     }, {
       root: sidebar,
@@ -1401,4 +1403,8 @@ class WorkspaceModulePrefetchError extends Error {
   ) {
     super(message || `Workspace module prefetch failed with ${status}.`);
   }
+}
+
+function isHeavyweightWorkspaceModule(moduleId: WorkspaceModuleId): boolean {
+  return moduleId === "agents" || moduleId === "market" || moduleId === "settings" || moduleId === "skills";
 }

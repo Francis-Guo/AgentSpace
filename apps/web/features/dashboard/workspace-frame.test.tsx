@@ -550,6 +550,45 @@ describe("WorkspaceFrame", () => {
     expect(window.location.pathname).toBe("/w/workspace-alpha/performance");
   });
 
+  it("does not automatically prefetch heavyweight sidebar modules through the viewport observer", async () => {
+    pathname = "/w/workspace-alpha/im";
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ data: { moduleId: "agents", data: {} } }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const intersectionObserver = installIntersectionObserverMock();
+
+    render(
+      <LanguageProvider>
+        <FeedbackToastProvider>
+          <WorkspaceFrame currentMembershipRole="owner" currentWorkspace={workspaces[0]} shell={shell} user={user} workspaces={workspaces}>
+            <div>Workspace content</div>
+          </WorkspaceFrame>
+        </FeedbackToastProvider>
+      </LanguageProvider>,
+    );
+
+    const agentsLink = await screen.findByRole("link", { name: /Agent Management/ });
+    let observer = intersectionObserver.instances.find((instance) => instance.observed.includes(agentsLink));
+    await waitFor(() => {
+      observer = intersectionObserver.instances.find((instance) => instance.observed.includes(agentsLink));
+      expect(observer).toBeTruthy();
+    });
+
+    await act(async () => {
+      observer?.callback([
+        {
+          isIntersecting: true,
+          target: agentsLink,
+        } as unknown as IntersectionObserverEntry,
+      ], observer as unknown as IntersectionObserver);
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("prefetches visible sidebar module links through the viewport observer", async () => {
     pathname = "/w/workspace-alpha/im";
     window.localStorage.setItem(
