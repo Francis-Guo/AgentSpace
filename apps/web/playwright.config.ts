@@ -16,6 +16,9 @@ export default defineConfig({
   use: {
     baseURL,
     headless: true,
+    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+      : undefined,
   },
   webServer: {
     command: `npm run build && npm run start -- --hostname 127.0.0.1 --port ${port}`,
@@ -33,6 +36,25 @@ export default defineConfig({
 });
 
 function prepareE2eDatabaseEnv(): Record<string, string> {
+  const explicitTestDatabaseUrl = process.env.AGENT_SPACE_TEST_DATABASE_URL?.trim()
+    || process.env.AGENT_SPACE_PG_TEST_URL?.trim();
+  if (explicitTestDatabaseUrl && process.env.AGENT_SPACE_E2E_FORCE_NEON_BRANCH !== "1") {
+    const env = {
+      AGENT_SPACE_E2E: "1",
+      AGENT_SPACE_E2E_DATABASE_URL: explicitTestDatabaseUrl,
+      AGENT_SPACE_E2E_NEON_BRANCH_ID: process.env.AGENT_SPACE_E2E_NEON_BRANCH_ID ?? "local-test-database",
+      AGENT_SPACE_E2E_NEON_BRANCH_NAME: process.env.AGENT_SPACE_E2E_NEON_BRANCH_NAME ?? "e2e-local-test-database",
+      AGENT_SPACE_TEST_DATABASE_URL: explicitTestDatabaseUrl,
+      AGENT_SPACE_PG_TEST_URL: explicitTestDatabaseUrl,
+      AGENT_SPACE_PG_URL: explicitTestDatabaseUrl,
+      DATABASE_URL: explicitTestDatabaseUrl,
+      NEON_DATABASE_URL: explicitTestDatabaseUrl,
+    };
+    Object.assign(process.env, env);
+    console.log("[e2e] Using explicit local test database.");
+    return env;
+  }
+
   const scriptPath = join(configDir, "scripts", "prepare-e2e-neon-branch.mjs");
   const raw = execFileSync(process.execPath, [scriptPath, "--json"], {
     cwd: resolve(configDir, "..", ".."),
@@ -42,7 +64,10 @@ function prepareE2eDatabaseEnv(): Record<string, string> {
       AGENT_SPACE_E2E_FORCE_NEON_BRANCH: process.env.AGENT_SPACE_E2E_FORCE_NEON_BRANCH ?? "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }).trim();
+  if (!raw) {
+    throw new Error("E2E database setup returned empty output.");
+  }
   const parsed = JSON.parse(raw) as { env?: Record<string, string>; branchName?: string };
   if (!parsed.env?.AGENT_SPACE_TEST_DATABASE_URL) {
     throw new Error("E2E database setup did not return AGENT_SPACE_TEST_DATABASE_URL.");
